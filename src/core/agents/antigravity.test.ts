@@ -181,5 +181,160 @@ describe("AntigravityAgent", () => {
 
       await expect(runPromise).rejects.toThrow("Antigravity failed with status ERROR: Permission denied");
     });
+
+    it("terminates the process group after a final structured output if Antigravity stays alive", async () => {
+      vi.useFakeTimers();
+      const processKill = vi
+        .spyOn(process, "kill")
+        .mockImplementation(() => true);
+      try {
+        const proc = createMockProcess();
+        Object.defineProperty(proc, "pid", { value: 4321 });
+        mockSpawn.mockReturnValue(proc);
+        const agent = new AntigravityAgent({
+          finalResultGraceMs: 25,
+          platform: "linux",
+          schema,
+        });
+        const content = JSON.stringify({
+          success: true,
+          summary: "done",
+          key_changes_made: [],
+          key_learnings: [],
+        });
+
+        const promise = agent.run("test prompt", "/work/dir");
+        emitJson(proc, {
+          event: "result",
+          result: {
+            status: "SUCCESS",
+            response: content,
+          },
+        });
+
+        await vi.advanceTimersByTimeAsync(24);
+        expect(processKill).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(processKill).toHaveBeenCalledWith(-4321, "SIGTERM");
+
+        proc.emit("close", null);
+        await expect(promise).resolves.toMatchObject({
+          output: { success: true, summary: "done" },
+        });
+      } finally {
+        processKill.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+
+    it("force kills Antigravity if it ignores the final-result shutdown signal", async () => {
+      vi.useFakeTimers();
+      const proc = createMockProcess();
+      Object.defineProperty(proc, "pid", { value: 4321 });
+      mockSpawn.mockReturnValue(proc);
+
+      const processKill = vi
+        .spyOn(process, "kill")
+        .mockImplementation((pid, signal) => {
+          if (pid === -4321 && signal === "SIGKILL") {
+            queueMicrotask(() => {
+              proc.emit("close", null);
+            });
+          }
+          return true;
+        });
+
+      const agent = new AntigravityAgent({
+        finalResultGraceMs: 25,
+        platform: "linux",
+        schema,
+      });
+      const content = JSON.stringify({
+        success: true,
+        summary: "done",
+        key_changes_made: [],
+        key_learnings: [],
+      });
+
+      try {
+        const promise = agent.run("test prompt", "/work/dir");
+        emitJson(proc, {
+          event: "result",
+          result: {
+            status: "SUCCESS",
+            response: content,
+          },
+        });
+
+        await vi.advanceTimersByTimeAsync(25);
+        expect(processKill).toHaveBeenCalledWith(-4321, "SIGTERM");
+
+        await vi.advanceTimersByTimeAsync(2_999);
+        expect(processKill).not.toHaveBeenCalledWith(-4321, "SIGKILL");
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(processKill).toHaveBeenCalledWith(-4321, "SIGKILL");
+
+        await expect(promise).resolves.toMatchObject({
+          output: { success: true, summary: "done" },
+        });
+      } finally {
+        processKill.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not schedule linger cleanup for error results", async () => {
+      vi.useFakeTimers();
+      const processKill = vi
+        .spyOn(process, "kill")
+        .mockImplementation(() => true);
+      try {
+        const proc = createMockProcess();
+        Object.defineProperty(proc, "pid", { value: 4321 });
+        mockSpawn.mockReturnValue(proc);
+        const agent = new AntigravityAgent({
+          finalResultGraceMs: 25,
+          platform: "linux",
+          schema,
+        });
+
+        const promise = agent.run("test prompt", "/work/dir");
+        emitJson(proc, {
+          event: "result",
+          result: {
+            status: "ERROR",
+            error: "auth failed",
+          },
+        });
+
+        await vi.advanceTimersByTimeAsync(25);
+        expect(processKill).not.toHaveBeenCalled();
+
+        proc.emit("close", 1, null);
+        await expect(promise).rejects.toThrow("Antigravity failed with status ERROR: auth failed");
+      } finally {
+        processKill.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+
+    it("cleans up and rejects on abort signal", async () => {
+      const proc = createMockProcess();
+      Object.defineProperty(proc, "pid", { value: 4321 });
+      mockSpawn.mockReturnValue(proc);
+
+      const agent = new AntigravityAgent({ schema, platform: "linux" });
+      const controller = new AbortController();
+
+      const runPromise = agent.run("test task", "/workspace", {
+        signal: controller.signal,
+      });
+
+      controller.abort();
+
+      await expect(runPromise).rejects.toThrow("Agent was aborted");
+    });
   });
 });

@@ -301,14 +301,7 @@ export class AntigravityAgent implements Agent {
         },
       );
 
-      if (
-        setupAbortHandler(signal, child, reject, () => {
-          void shutdownAntigravityProcess(child, this.platform);
-        })
-      ) {
-        return;
-      }
-
+      let settled = false;
       let resultEvent: AntigravityResultEvent | null = null;
       let finalResultCleanupTimer: ReturnType<typeof setTimeout> | null = null;
       let closedAfterFinalCleanup = false;
@@ -321,6 +314,57 @@ export class AntigravityAgent implements Agent {
         cacheCreationTokens: 0,
       };
 
+      const cleanupResources = () => {
+        if (finalResultCleanupTimer) {
+          clearTimeout(finalResultCleanupTimer);
+          finalResultCleanupTimer = null;
+        }
+        logStream?.end();
+      };
+
+      const settleSuccess = () => {
+        if (settled) return;
+        settled = true;
+        cleanupResources();
+
+        if (resultEvent?.result?.status === "SUCCESS" && resultEvent.result?.response) {
+          try {
+            const output = parseAgentOutput(
+              resultEvent.result.response,
+              this.schema,
+              "Antigravity",
+            );
+            resolve({
+              output,
+              usage: latestUsage,
+            });
+          } catch (err) {
+            reject(
+              new Error(
+                `Antigravity result was not valid: ${err instanceof Error ? err.message : String(err)}`,
+              ),
+            );
+          }
+        }
+      };
+
+      const settleFailure = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        cleanupResources();
+        reject(err);
+      };
+
+      if (
+        setupAbortHandler(signal, child, reject, () => {
+          settled = true;
+          cleanupResources();
+          void shutdownAntigravityProcess(child, this.platform);
+        })
+      ) {
+        return;
+      }
+
       child.stderr!.on("data", (data: Buffer) => {
         stderr += data.toString();
       });
@@ -330,7 +374,7 @@ export class AntigravityAgent implements Agent {
       });
 
       child.on("error", (err) => {
-        reject(new Error(`Failed to spawn antigravity: ${err.message}`));
+        settleFailure(new Error(`Failed to spawn antigravity: ${err.message}`));
       });
 
       parseJSONLStream<AntigravityEvent>(child.stdout!, logStream, (event) => {
@@ -356,48 +400,58 @@ export class AntigravityAgent implements Agent {
             resultEvent.result?.status === "SUCCESS" &&
             resultEvent.result?.response
           ) {
+            if (finalResultCleanupTimer) {
+              clearTimeout(finalResultCleanupTimer);
+            }
             finalResultCleanupTimer = setTimeout(() => {
               closedAfterFinalCleanup = true;
-              void shutdownAntigravityProcess(child, this.platform);
+              void shutdownAntigravityProcess(child, this.platform).then(() => {
+                if (resultEvent?.result?.status === "SUCCESS" && resultEvent.result?.response) {
+                  settleSuccess();
+                }
+              });
             }, this.finalResultGraceMs);
           }
         }
       });
 
-      child.on("close", (code, closeSignal) => {
-        if (finalResultCleanupTimer) {
-          clearTimeout(finalResultCleanupTimer);
-        }
-        logStream?.end();
+      child.on("close", (code) => {
+        if (settled) return;
 
         if (signal?.aborted) {
+          settled = true;
+          cleanupResources();
           return;
         }
 
         if (resultEvent?.result?.status === "SUCCESS" && resultEvent.result?.response) {
-          try {
-            const output = parseAgentOutput(
-              resultEvent.result.response,
-              this.schema,
-              "Antigravity",
-            );
-            resolve({
-              output,
-              usage: latestUsage,
-            });
-            return;
-          } catch (err) {
-            reject(
+          settleSuccess();
+          return;
+        }
+
+        if (code !== 0 && !closedAfterFinalCleanup) {
+          if (resultEvent?.result?.status && resultEvent.result.status !== "SUCCESS") {
+            settleFailure(
               new Error(
-                `Antigravity result was not valid: ${err instanceof Error ? err.message : String(err)}`,
+                `Antigravity failed with status ${resultEvent.result.status}: ${resultEvent.result.error || stderr || "unknown error"}`,
               ),
             );
             return;
           }
+
+          const exitDescription = describeChildProcessExit(
+            "Antigravity",
+            code,
+            stdoutTail,
+            stderr,
+          ).detail;
+          const details = stderr.trim() || stdoutTail.trim() || exitDescription;
+          settleFailure(new Error(`Antigravity exited prematurely: ${details}`));
+          return;
         }
 
         if (resultEvent?.result?.status && resultEvent.result.status !== "SUCCESS") {
-          reject(
+          settleFailure(
             new Error(
               `Antigravity failed with status ${resultEvent.result.status}: ${resultEvent.result.error || stderr || "unknown error"}`,
             ),
@@ -412,9 +466,7 @@ export class AntigravityAgent implements Agent {
           stderr,
         ).detail;
         const details = stderr.trim() || stdoutTail.trim() || exitDescription;
-        reject(
-          new Error(`Antigravity exited prematurely: ${details}`),
-        );
+        settleFailure(new Error(`Antigravity exited prematurely: ${details}`));
       });
     });
   }
