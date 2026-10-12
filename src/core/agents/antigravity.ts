@@ -319,7 +319,6 @@ export class AntigravityAgent implements Agent {
           clearTimeout(finalResultCleanupTimer);
           finalResultCleanupTimer = null;
         }
-        logStream?.end();
       };
 
       const settleSuccess = () => {
@@ -362,6 +361,7 @@ export class AntigravityAgent implements Agent {
           void shutdownAntigravityProcess(child, this.platform);
         })
       ) {
+        logStream?.end();
         return;
       }
 
@@ -374,6 +374,7 @@ export class AntigravityAgent implements Agent {
       });
 
       child.on("error", (err) => {
+        logStream?.end();
         settleFailure(new Error(`Failed to spawn antigravity: ${err.message}`));
       });
 
@@ -416,6 +417,7 @@ export class AntigravityAgent implements Agent {
       });
 
       child.on("close", (code) => {
+        logStream?.end();
         if (settled) return;
 
         if (signal?.aborted) {
