@@ -136,6 +136,18 @@ type AntigravityEvent =
   | AntigravityResultEvent
   | { event: string };
 
+function isStepUpdateEvent(
+  event: AntigravityEvent,
+): event is AntigravityStepUpdateEvent {
+  return event.event === "step_update" && "step_update" in event;
+}
+
+function isResultEvent(
+  event: AntigravityEvent,
+): event is AntigravityResultEvent {
+  return event.event === "result" && "result" in event;
+}
+
 function shouldUseWindowsShell(
   bin: string,
   platform: NodeJS.Platform,
@@ -192,6 +204,20 @@ function terminateAntigravityProcess(
   }
 
   child.kill("SIGTERM");
+}
+
+async function shutdownAntigravityProcess(
+  child: ReturnType<typeof spawn>,
+  platform: NodeJS.Platform,
+): Promise<void> {
+  if (platform === "win32") {
+    terminateAntigravityProcess(child, platform);
+    return;
+  }
+
+  await shutdownChildProcess(child, {
+    detached: true,
+  });
 }
 
 export function buildAntigravityArgs(
@@ -276,9 +302,9 @@ export class AntigravityAgent implements Agent {
       );
 
       if (
-        setupAbortHandler(signal, child, reject, () =>
-          terminateAntigravityProcess(child, this.platform),
-        )
+        setupAbortHandler(signal, child, reject, () => {
+          void shutdownAntigravityProcess(child, this.platform);
+        })
       ) {
         return;
       }
@@ -308,18 +334,18 @@ export class AntigravityAgent implements Agent {
       });
 
       parseJSONLStream<AntigravityEvent>(child.stdout!, logStream, (event) => {
-        if (event.event === "step_update" && event.step_update) {
-          if (event.step_update.text_delta && onMessage) {
+        if (isStepUpdateEvent(event)) {
+          if (event.step_update?.text_delta && onMessage) {
             onMessage(event.step_update.text_delta);
           }
-          if (event.step_update.usage) {
+          if (event.step_update?.usage) {
             latestUsage = toTokenUsage(event.step_update.usage);
             if (onUsage) {
               onUsage(latestUsage);
             }
           }
-        } else if (event.event === "result") {
-          resultEvent = event as AntigravityResultEvent;
+        } else if (isResultEvent(event)) {
+          resultEvent = event;
           if (resultEvent.result?.usage) {
             latestUsage = toTokenUsage(resultEvent.result.usage);
             if (onUsage) {
@@ -332,7 +358,7 @@ export class AntigravityAgent implements Agent {
           ) {
             finalResultCleanupTimer = setTimeout(() => {
               closedAfterFinalCleanup = true;
-              terminateAntigravityProcess(child, this.platform);
+              void shutdownAntigravityProcess(child, this.platform);
             }, this.finalResultGraceMs);
           }
         }
@@ -379,7 +405,12 @@ export class AntigravityAgent implements Agent {
           return;
         }
 
-        const exitDescription = describeChildProcessExit(code, closeSignal);
+        const exitDescription = describeChildProcessExit(
+          "Antigravity",
+          code,
+          stdoutTail,
+          stderr,
+        ).detail;
         const details = stderr.trim() || stdoutTail.trim() || exitDescription;
         reject(
           new Error(`Antigravity exited prematurely: ${details}`),

@@ -215,6 +215,17 @@ function isReservedAgentArg(agent: AgentName, arg: string): boolean {
         arg === "--api-key" ||
         arg.startsWith("--api-key=")
       );
+    case "antigravity":
+    case "agy":
+      return (
+        arg === "-p" ||
+        arg === "--prompt" ||
+        arg.startsWith("--prompt=") ||
+        arg === "--output-format" ||
+        arg.startsWith("--output-format=") ||
+        arg === "--json-schema" ||
+        arg.startsWith("--json-schema=")
+      );
   }
 }
 
