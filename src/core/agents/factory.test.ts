@@ -80,6 +80,17 @@ vi.mock("./opencode.js", () => {
   return { OpenCodeAgent };
 });
 
+vi.mock("./antigravity.js", () => {
+  const AntigravityAgent = vi.fn(function (
+    this: Record<string, unknown>,
+    deps?: Record<string, unknown>,
+  ) {
+    this.name = "antigravity";
+    this.deps = deps;
+  });
+  return { AntigravityAgent };
+});
+
 vi.mock("./acp.js", () => {
   const AcpAgent = vi.fn(function (
     this: Record<string, unknown>,
@@ -101,6 +112,7 @@ import { OpenCodeAgent } from "./opencode.js";
 import { PiAgent } from "./pi.js";
 import { CursorAgent } from "./cursor.js";
 import { RovoDevAgent } from "./rovodev.js";
+import { AntigravityAgent } from "./antigravity.js";
 import type { RunInfo } from "../run.js";
 
 const stubRunInfo: RunInfo = {
@@ -479,5 +491,37 @@ describe("createAgent", () => {
       runId: stubRunInfo.runId,
       sessionStateDir: acpSessionStateDir,
     });
+  });
+
+  it("creates an AntigravityAgent when the name is antigravity or agy", () => {
+    const agent = createAgent(
+      "antigravity",
+      stubRunInfo,
+      "/custom/agy",
+      ["--model", "gemini-3.8-flash"],
+      { includeStopField: false },
+    );
+
+    expect(AntigravityAgent).toHaveBeenCalledWith({
+      bin: "/custom/agy",
+      extraArgs: ["--model", "gemini-3.8-flash"],
+      schema: noStopSchema,
+    });
+    expect(agent.name).toBe("antigravity");
+
+    const agyAgent = createAgent(
+      "agy",
+      stubRunInfo,
+      undefined,
+      undefined,
+      { includeStopField: true },
+    );
+
+    expect(AntigravityAgent).toHaveBeenCalledWith({
+      bin: undefined,
+      extraArgs: undefined,
+      schema: withStopSchema,
+    });
+    expect(agyAgent.name).toBe("antigravity");
   });
 });

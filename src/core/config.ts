@@ -14,6 +14,8 @@ export const AGENT_NAMES = [
   "copilot",
   "pi",
   "cursor",
+  "antigravity",
+  "agy",
 ] as const;
 
 export type AgentName = (typeof AGENT_NAMES)[number];

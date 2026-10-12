@@ -14,6 +14,7 @@ import { CursorAgent } from "./cursor.js";
 import { OpenCodeAgent } from "./opencode.js";
 import { PiAgent } from "./pi.js";
 import { RovoDevAgent } from "./rovodev.js";
+import { AntigravityAgent } from "./antigravity.js";
 
 export interface CreateAgentOptions {
   includeStopField: boolean;
@@ -84,6 +85,13 @@ export function createAgent(
       return new RovoDevAgent(runInfo.schemaPath, {
         bin: pathOverride,
         extraArgs: agentArgsOverride,
+      });
+    case "antigravity":
+    case "agy":
+      return new AntigravityAgent({
+        bin: pathOverride,
+        extraArgs: agentArgsOverride,
+        schema,
       });
   }
 }
